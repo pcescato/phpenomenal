@@ -14,7 +14,7 @@ Products and orders remain approximately 0.15N and 0.30N respectively.
 | `IndexedSelectWorkload` | Entire email column retained, O(N) | O(min(E, N)) IDs and email values |
 | `JoinWorkload` | Entire order ID column retained, O(N) | O(min(E, order count)) IDs |
 | `UpdateByPrimaryKeyWorkload` | Full user rows plus ID and original-name arrays, O(N) | O(min(E, N)) IDs and original names |
-| `DeleteByPrimaryKeyWorkload` | Full product rows plus ID and restoration arrays, O(N) | O(min(E, product count)) product records |
+| `DeleteByPrimaryKeyWorkload` | Full product rows plus ID and restoration arrays, O(N) | O(min(E, product count)) product records plus their dependent order items |
 | `RangeSelectWorkload` preparation | Sorted full timestamp column, O(N) | At most 2E timestamp endpoints plus E windows |
 | `RangeSelectWorkload` execution | Full result array and client result buffer, O(R), potentially O(N) | One fetched PHP row retained by the harness; default driver buffers may be O(R) |
 | `DatasetPopulator::insertUsers/insertProducts` | Unused ID maps accumulated during otherwise streaming insertion, O(N) | O(1), reusable one-row insert statements |
@@ -53,6 +53,10 @@ ceiling, silent truncation, or fatal-OOM recovery claim is introduced.
 Indexed lookup values and update/delete restoration data are fetched using
 one prepared primary-key query per sampled ID. All discovery occurs before
 `WorkloadTimer` executes the workload.
+Delete preparation additionally retains the original order items referencing
+sampled products, so cleanup restores their exact values after the products.
+This retains only affected dependencies, not a full-dataset snapshot; memory
+also depends on the number of items referencing those sampled products.
 
 The range workload preserves its original sorted timestamp ranks: execution i
 uses i modulo N and floor(i + N/10) modulo N, ordering the endpoints as before.

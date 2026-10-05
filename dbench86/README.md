@@ -215,9 +215,9 @@ php tests/run.php
 Unit tests cover configuration, statistics, deterministic generation, bounded
 preparation, CLI rendering and monolith generation. SQLite integration tests
 exercise real database behavior without external servers. Optional MariaDB and
-PostgreSQL tests run when configured; missing configuration or caught connection
-failures can produce skips. Configured population/range tests need working
-connections and can fail the suite. Server tests can reset configured databases;
+PostgreSQL tests run when configured; missing configuration produces skips.
+Configured connection, population and workload errors fail the suite.
+Server tests can reset configured databases;
 see [test configuration](CONFIGURATION.md#canonical-tests).
 
 `Php86ComplianceTest` uses the same application builder as `--build-monolith`,
@@ -225,8 +225,8 @@ then runs the official checker against a temporary executable monolith.
 Standalone tests verify isolated help/SQLite execution and semantic equivalence
 with the multi-file launcher. Keep the parent `scripts/` directory available.
 Run the suite through `tests/run.php`, rather than invoking individual test files.
-Retain raw output: totals count assertions and runner skips, while some optional
-branches print omissions without incrementing the skipped total.
+Retain raw output: totals count runner assertions, caught test exceptions and skips.
+All test failures affect the runner's failure total and final process exit status.
 
 ## Benchmark methodology
 

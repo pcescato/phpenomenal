@@ -313,7 +313,7 @@ final class DatasetPopulatorTest extends TestCase
         $password = $_ENV['DBENCH86_MARIADB_PASSWORD'] ?? null;
 
         if (!$host || !$port || !$database || !$username) {
-            echo "⊘ MariaDB population test skipped (DBENCH86_MARIADB_* not configured)\n";
+            $this->skip("MariaDB population not configured");
             return;
         }
 
@@ -367,7 +367,7 @@ final class DatasetPopulatorTest extends TestCase
         $password = $_ENV['DBENCH86_PGSQL_PASSWORD'] ?? null;
 
         if (!$host || !$port || !$database || !$username) {
-            echo "⊘ PostgreSQL population test skipped (DBENCH86_PGSQL_* not configured)\n";
+            $this->skip("PostgreSQL population not configured");
             return;
         }
 

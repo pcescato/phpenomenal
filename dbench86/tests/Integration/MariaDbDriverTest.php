@@ -36,7 +36,7 @@ class MariaDbDriverTest extends TestCase
                 "connect() must return a PDO instance"
             );
         } catch (\Exception $e) {
-            $this->skip("MariaDB connection failed: " . $e->getMessage());
+            $this->runner->fail("MariaDB connection failed: " . $e->getMessage());
         }
     }
 
@@ -77,7 +77,7 @@ class MariaDbDriverTest extends TestCase
                 "Version string should contain version numbers (e.g., '10.6'): got '$version'"
             );
         } catch (\Exception $e) {
-            $this->skip("MariaDB version discovery failed: " . $e->getMessage());
+            $this->runner->fail("MariaDB version discovery failed: " . $e->getMessage());
         }
     }
 

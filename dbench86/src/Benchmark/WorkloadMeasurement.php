@@ -21,7 +21,8 @@ final class WorkloadMeasurement
      * @param int $durationNanoseconds Elapsed wall time in nanoseconds (hrtime(true) based).
      *                                  Not affected by system clock adjustments.
      * @param int $rowsAffected Number of rows affected by the workload execution.
-     *                           Zero if the workload failed or timed out before returning.
+     *                           Zero if execute() threw; completed executions retain their returned
+     *                           logical operation count even when marked timed out.
      * @param bool $timedOut True if execution exceeded the configured timeout.
      * @param bool $failed True if the workload threw an exception during execute().
      */

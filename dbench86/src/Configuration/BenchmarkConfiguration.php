@@ -67,12 +67,24 @@ class BenchmarkConfiguration
         return $this->validatePositiveInt($raw, 'timeout');
     }
 
+    private function validateDecimalInt(mixed $value, string $name): int
+    {
+        if ((!is_int($value) && !is_string($value))
+            || preg_match('/\A[0-9]+\z/', (string) $value) !== 1) {
+            throw new InvalidArgumentException("--{$name} must be a whole decimal integer");
+        }
+        $digits = ltrim((string) $value, '0');
+        $maximum = (string) PHP_INT_MAX;
+        if (strlen($digits) > strlen($maximum)
+            || (strlen($digits) === strlen($maximum) && strcmp($digits, $maximum) > 0)) {
+            throw new InvalidArgumentException("--{$name} exceeds PHP_INT_MAX");
+        }
+        return (int) $value;
+    }
+
     private function validatePositiveInt(mixed $value, string $name): int
     {
-        if (!is_numeric($value)) {
-            throw new InvalidArgumentException("--{$name} doit être numérique, reçu : {$value}");
-        }
-        $int = (int)$value;
+        $int = $this->validateDecimalInt($value, $name);
         if ($int <= 0) {
             throw new InvalidArgumentException("--{$name} doit être positif (> 0), reçu : {$value}");
         }
@@ -81,14 +93,7 @@ class BenchmarkConfiguration
 
     private function validateNonNegativeInt(mixed $value, string $name): int
     {
-        if (!is_numeric($value)) {
-            throw new InvalidArgumentException("--{$name} doit être numérique, reçu : {$value}");
-        }
-        $int = (int)$value;
-        if ($int < 0) {
-            throw new InvalidArgumentException("--{$name} doit être >= 0, reçu : {$value}");
-        }
-        return $int;
+        return $this->validateDecimalInt($value, $name);
     }
 
     private function validateSort(string $value): string

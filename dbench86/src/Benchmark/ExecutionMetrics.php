@@ -11,7 +11,7 @@ namespace DBench86\Benchmark;
  * only mutated by incrementing its public properties.
  *
  * Intended usage pattern:
- *   EXECUTION_METRICS->queries += 1;  // One query = one execute() call
+ *   EXECUTION_METRICS->queries += 1;  // One attempt = one execute() call
  *   EXECUTION_METRICS->runsCompleted++;
  *
  * Not intended for:
@@ -22,10 +22,10 @@ namespace DBench86\Benchmark;
 final class ExecutionMetrics
 {
     /**
-     * Total number of queries executed (one per execute() call).
+     * Total attempted workload executions, including warmups, failures and timeouts.
      *
-     * Incremented by 1 for each successful workload.execute() invocation,
-     * regardless of the number of rows affected or returned by that query.
+     * Incremented by 1 for every workload.execute() attempt. This is not a SQL
+     * statement count: a workload may execute multiple statements.
      * For tracking rows affected, see the WorkloadMeasurement return value.
      */
     public int $queries = 0;
@@ -33,14 +33,14 @@ final class ExecutionMetrics
     /**
      * Number of workload runs that completed successfully.
      *
-     * Incremented once per successful execute() invocation.
+     * Incremented once per successful execute() invocation within the timeout.
      */
     public int $runsCompleted = 0;
 
     /**
      * Number of workload runs that failed.
      *
-     * Incremented when a workload.execute() throws an exception or returns an error.
+     * Incremented when a workload.execute() throws an exception.
      * Not incremented for connection failures or benchmark infrastructure errors.
      */
     public int $failures = 0;
@@ -49,8 +49,7 @@ final class ExecutionMetrics
      * Number of workload runs that timed out.
      *
      * Incremented when a workload execution exceeds the configured timeout threshold.
-     * May be a subset of $failures (timeouts can be treated as failures) depending on
-     * benchmark configuration.
+     * Only completed executions are checked for timeout; failures are counted separately.
      */
     public int $timeouts = 0;
 }
@@ -61,7 +60,7 @@ final class ExecutionMetrics
  * This constant is initialized once at startup and never reassigned. All workload
  * executions increment its properties directly:
  *
- *   EXECUTION_METRICS->queries += 1;  // One query = one execute() call
+ *   EXECUTION_METRICS->queries += 1;  // One attempt = one execute() call
  *   EXECUTION_METRICS->runsCompleted++;
  *   EXECUTION_METRICS->failures++;
  *

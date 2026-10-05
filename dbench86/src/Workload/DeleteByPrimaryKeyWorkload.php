@@ -15,6 +15,7 @@ final class DeleteByPrimaryKeyWorkload implements Workload
     private int $currentIndex = 0;
     private array $deletedProducts = [];
     private array $productsDeletedInRun = [];
+    private array $originalOrderItems = [];
 
     public function __construct(private readonly DeterministicSamples $samples = new DeterministicSamples()) {}
 
@@ -32,11 +33,19 @@ final class DeleteByPrimaryKeyWorkload implements Workload
 
         $this->productIds = $this->samples->tableIds($pdo, 'products', $this->name());
         $this->deletedProducts = [];
+        $this->originalOrderItems = [];
+        $items = $pdo->prepare('SELECT id, order_id, product_id, quantity, unit_price FROM order_items WHERE product_id = ?');
         $lookup = $pdo->prepare('SELECT id, sku, name, price FROM products WHERE id = ?');
         foreach ($this->productIds as $id) {
             $lookup->execute([$id]);
             $this->deletedProducts[$id] = $lookup->fetch(PDO::FETCH_ASSOC);
             $lookup->closeCursor();
+            $items->execute([$id]);
+            $this->originalOrderItems[$id] = [];
+            while ($item = $items->fetch(PDO::FETCH_ASSOC)) {
+                $this->originalOrderItems[$id][] = $item;
+            }
+            $items->closeCursor();
         }
 
         $this->deleteStatement = $pdo->prepare('DELETE FROM products WHERE id = ?');
@@ -68,46 +77,42 @@ final class DeleteByPrimaryKeyWorkload implements Workload
 
     public function cleanup(PDO $pdo): void
     {
-        // Workload Isolation Strategy:
-        // After deletions, we must restore the deleted products to ensure the dataset
-        // is in a consistent state for repeated benchmark cycles.
-        //
-        // Challenge: Products are referenced by order_items via foreign key constraint.
-        // When we delete a product, any order_items referencing it become orphaned.
-        //
-        // Solution: Before re-inserting products, we must first delete any orphaned
-        // order_items that reference products not yet restored. This maintains referential
-        // integrity and allows the products to be re-inserted successfully.
-
-        if (!empty($this->productsDeletedInRun) && $this->insertStatement !== null) {
-            // Get the actual product IDs that were deleted in this run
-            $deletedIds = array_keys($this->productsDeletedInRun);
-
-            // First, delete orphaned order_items that reference deleted products
-            $idList = implode(',', $deletedIds);
-            $pdo->exec("DELETE FROM order_items WHERE product_id IN ({$idList})");
-
-            // Now re-insert the deleted products from our stored data
-            foreach ($deletedIds as $productId) {
-                if (!isset($this->deletedProducts[$productId])) {
-                    // This should not happen in normal operation
-                    // Skip if product data is missing
-                    continue;
-                }
-
-                $product = $this->deletedProducts[$productId];
+        if ($this->insertStatement === null || $this->productsDeletedInRun === []) {
+            return;
+        }
+        // Preparation snapshots only sampled products and their dependent items.
+        // Existence checks also handle an execution that failed between the two deletes.
+        $productExists = $pdo->prepare('SELECT id FROM products WHERE id = ?');
+        $itemExists = $pdo->prepare('SELECT id FROM order_items WHERE id = ?');
+        $restoreItem = $pdo->prepare(
+            'INSERT INTO order_items (id, order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?, ?)'
+        );
+        foreach (array_keys($this->productsDeletedInRun) as $productId) {
+            $product = $this->deletedProducts[$productId];
+            $productExists->execute([$productId]);
+            $exists = $productExists->fetchColumn() !== false;
+            $productExists->closeCursor();
+            if (!$exists) {
                 try {
                     $this->insertStatement->execute([
-                        $product['id'],
-                        $product['sku'],
-                        $product['name'],
-                        $product['price']
+                        $product['id'], $product['sku'], $product['name'], $product['price'],
                     ]);
-                } catch (\PDOException $e) {
-                    // Product may already exist (concurrent execution or race condition)
-                    // Skip and continue
+                } finally {
+                    $this->insertStatement->closeCursor();
                 }
             }
+            foreach ($this->originalOrderItems[$productId] as $item) {
+                $itemExists->execute([$item['id']]);
+                $exists = $itemExists->fetchColumn() !== false;
+                $itemExists->closeCursor();
+                if (!$exists) {
+                    $restoreItem->execute([
+                        $item['id'], $item['order_id'], $item['product_id'],
+                        $item['quantity'], $item['unit_price'],
+                    ]);
+                }
+            }
+            unset($this->productsDeletedInRun[$productId]);
         }
     }
 

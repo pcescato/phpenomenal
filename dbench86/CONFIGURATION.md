@@ -84,7 +84,8 @@ not execution order. No-success rows appear last in either direction.
 Batch requests retain native clamp() and driver operational policy; the default
 100-row request preserves the pre-cleanup effective workload.
 
-Rows/runs/batch-size must be positive; warmups may be zero. Combined execution
+Rows/runs/batch-size must be positive whole decimal integers; warmups may be zero.
+Fractions, exponent notation and values above PHP_INT_MAX are rejected. Combined execution
 count must fit an integer. Timeout accepts positive whole decimal seconds within
 PHP_INT_MAX; fractions, signs and zero are rejected. Duration::compare() checks
 it after completion without interrupting SQL. No PHP ini or server tuning occurs.

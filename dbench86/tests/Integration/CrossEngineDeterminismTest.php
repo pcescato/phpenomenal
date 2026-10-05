@@ -111,7 +111,7 @@ final class CrossEngineDeterminismTest
             ))->populate();
             echo "✓\n";
         } else {
-            echo "  MariaDB... ⊘ skipped (DBENCH86_MARIADB_* not configured)\n";
+            \Tests\test_runner()->skip("MariaDB determinism not configured");
         }
 
         // PostgreSQL (optional)
@@ -131,7 +131,7 @@ final class CrossEngineDeterminismTest
             ))->populate();
             echo "✓\n";
         } else {
-            echo "  PostgreSQL... ⊘ skipped (DBENCH86_PGSQL_* not configured)\n";
+            \Tests\test_runner()->skip("PostgreSQL determinism not configured");
         }
 
         echo "\n";
@@ -239,6 +239,7 @@ final class CrossEngineDeterminismTest
             if (count($engineRows) !== count($referenceRows)) {
                 echo "  ⚠ Row count mismatch: {$engine}=" . count($engineRows)
                     . " vs {$reference}=" . count($referenceRows) . "\n";
+                $this->divergenceCount++;
                 continue;
             }
 
@@ -361,9 +362,9 @@ final class CrossEngineDeterminismTest
 
         if ($this->divergenceCount > 0) {
             echo "❌ TEST FAILED: {$this->divergenceCount} divergences detected in data values!\n";
-            exit(1);
+            \Tests\test_runner()->fail('Cross-engine data divergences: ' . $this->divergenceCount);
         } else {
-            echo "✅ Cross-engine determinism validated!\n";
+            \Tests\test_runner()->assertTrue(true, "Cross-engine determinism validated");
         }
     }
 
@@ -389,12 +390,5 @@ final class CrossEngineDeterminismTest
     }
 }
 
-// Entry point for test runner
-$test = new CrossEngineDeterminismTest();
-try {
-    $test->run();
-    echo "\n✅ Test passed!\n";
-} catch (\Throwable $e) {
-    echo "\n❌ Test failed: " . $e->getMessage() . "\n";
-    exit(1);
-}
+// Exceptions are accounted for by the canonical runner.
+(new CrossEngineDeterminismTest())->run();

@@ -23,7 +23,7 @@ use Time\Duration;
  * - Cleanup and preparation exclusion from timing
  * - Workload isolation after timeout
  */
-final class WorkloadTimerTest
+final class WorkloadTimerTest extends \Tests\TestCase
 {
     private ?PDO $pdo = null;
 
@@ -68,17 +68,17 @@ final class WorkloadTimerTest
         $timeout = Duration::fromSeconds(10);
         $timer = new WorkloadTimer($timeout);
 
-        $measurement = $timer->run(
+        $measurement = $this->measure($timer,
             new \DBench86\Workload\PrimaryKeySelectWorkload(),
             $this->pdo
         );
 
         // Measurement should have recorded duration
-        assert($measurement->durationNanoseconds > 0,
+        $this->assertTrue($measurement->durationNanoseconds > 0,
             'Duration should be positive');
-        assert($measurement->durationNanoseconds < 1_000_000_000,
+        $this->assertTrue($measurement->durationNanoseconds < 1_000_000_000,
             'Fast query should complete in < 1 second');
-        assert(!$measurement->timedOut,
+        $this->assertTrue(!$measurement->timedOut,
             'Fast query should not timeout with 10s limit');
     }
 
@@ -94,11 +94,11 @@ final class WorkloadTimerTest
         );
 
         $seconds = $measurement->durationSeconds();
-        assert($seconds === 1.5,
+        $this->assertTrue($seconds === 1.5,
             'Should convert nanoseconds to seconds correctly');
 
         $milliseconds = $measurement->durationMilliseconds();
-        assert($milliseconds === 1500.0,
+        $this->assertTrue($milliseconds === 1500.0,
             'Should convert nanoseconds to milliseconds correctly');
     }
 
@@ -114,7 +114,7 @@ final class WorkloadTimerTest
         );
 
         $throughput = $measurement->rowsPerSecond();
-        assert($throughput === 1000.0,
+        $this->assertTrue($throughput === 1000.0,
             'Should calculate 1000 rows/second correctly');
 
         // Test division by zero protection
@@ -122,7 +122,7 @@ final class WorkloadTimerTest
             durationNanoseconds: 0,
             rowsAffected: 1000,
         );
-        assert($zeroTime->rowsPerSecond() === 0.0,
+        $this->assertTrue($zeroTime->rowsPerSecond() === 0.0,
             'Should return 0.0 for zero duration (prevent div by zero)');
     }
 
@@ -137,11 +137,12 @@ final class WorkloadTimerTest
         $timer = new WorkloadTimer($shortTimeout);
 
         $workload = new SlowTestWorkload(200); // Sleep 200ms in execute
-        $measurement = $timer->run($workload, $this->pdo);
+        $measurement = $this->measure($timer, $workload, $this->pdo);
 
-        assert($measurement->timedOut,
+        $this->assertTrue($measurement->timedOut,
             'Workload taking 200ms should timeout with 10ms limit');
-        assert($measurement->durationNanoseconds > 200_000_000,
+        $this->assertEquals(1, $measurement->rowsAffected, 'Completed timeout retains returned operation count');
+        $this->assertTrue($measurement->durationNanoseconds > 200_000_000,
             'Duration should reflect actual execution time (>200ms)');
     }
 
@@ -156,9 +157,9 @@ final class WorkloadTimerTest
         $timer = new WorkloadTimer($generousTimeout);
 
         $workload = new SlowTestWorkload(50); // Sleep 50ms
-        $measurement = $timer->run($workload, $this->pdo);
+        $measurement = $this->measure($timer, $workload, $this->pdo);
 
-        assert(!$measurement->timedOut,
+        $this->assertTrue(!$measurement->timedOut,
             'Workload taking 50ms should not timeout with 1s limit');
     }
 
@@ -176,14 +177,14 @@ final class WorkloadTimerTest
         $timer = new WorkloadTimer($timeout);
 
         // Execute fast workload
-        $timer->run(
+        $this->measure($timer,
             new \DBench86\Workload\PrimaryKeySelectWorkload(),
             $this->pdo
         );
 
-        assert(\DBench86\Benchmark\EXECUTION_METRICS->queries === 1,
+        $this->assertTrue(\DBench86\Benchmark\EXECUTION_METRICS->queries === 1,
             'queries should increment by 1');
-        assert(\DBench86\Benchmark\EXECUTION_METRICS->timeouts === 0,
+        $this->assertTrue(\DBench86\Benchmark\EXECUTION_METRICS->timeouts === 0,
             'timeouts should stay 0 for non-timeout execution');
     }
 
@@ -201,11 +202,11 @@ final class WorkloadTimerTest
         $timer = new WorkloadTimer($shortTimeout);
 
         $workload = new SlowTestWorkload(200); // Will timeout
-        $timer->run($workload, $this->pdo);
+        $this->measure($timer, $workload, $this->pdo);
 
-        assert(\DBench86\Benchmark\EXECUTION_METRICS->queries === 1,
+        $this->assertTrue(\DBench86\Benchmark\EXECUTION_METRICS->queries === 1,
             'queries should increment even on timeout');
-        assert(\DBench86\Benchmark\EXECUTION_METRICS->timeouts === 1,
+        $this->assertTrue(\DBench86\Benchmark\EXECUTION_METRICS->timeouts === 1,
             'timeouts should increment when measurement is timed out');
     }
 
@@ -225,13 +226,13 @@ final class WorkloadTimerTest
 
         // Execute 5 times
         for ($i = 0; $i < 5; $i++) {
-            $measurement = $timer->run($workload, $this->pdo);
-            assert(!$measurement->timedOut, "Iteration $i should not timeout");
+            $measurement = $this->measure($timer, $workload, $this->pdo);
+            $this->assertTrue(!$measurement->timedOut, "Iteration $i should not timeout");
         }
 
-        assert(\DBench86\Benchmark\EXECUTION_METRICS->queries === 5,
+        $this->assertTrue(\DBench86\Benchmark\EXECUTION_METRICS->queries === 5,
             'Should have 5 queries after 5 executions');
-        assert(\DBench86\Benchmark\EXECUTION_METRICS->timeouts === 0,
+        $this->assertTrue(\DBench86\Benchmark\EXECUTION_METRICS->timeouts === 0,
             'Should have 0 timeouts for fast queries');
     }
 
@@ -245,16 +246,19 @@ final class WorkloadTimerTest
         $timer = new WorkloadTimer($timeout);
 
         $workload = new TimingCheckWorkload();
-        $measurement = $timer->run($workload, $this->pdo);
+        $measurement = $this->measure($timer, $workload, $this->pdo);
 
         // The TimingCheckWorkload tracks whether prepare/cleanup were timed
         // This test verifies they were NOT included in the duration
-        assert($measurement->durationNanoseconds > 0,
+        $this->assertTrue($measurement->durationNanoseconds > 0,
             'Should have recorded execution time');
+
+        $this->assertTrue($measurement->durationNanoseconds < $workload->getPrepareAndCleanupNanoseconds(),
+            'Preparation and cleanup delays must be outside measured execution');
 
         // Verify workload's bookkeeping shows timing was correct
         $prepareAndCleanupTime = $workload->getPrepareAndCleanupNanoseconds();
-        assert($prepareAndCleanupTime >= 0,
+        $this->assertTrue($prepareAndCleanupTime >= 20_000_000,
             'Prepare and cleanup overhead tracked separately');
     }
 
@@ -269,16 +273,16 @@ final class WorkloadTimerTest
 
         // First workload times out
         $workload = new SlowTestWorkload(200);
-        $measurement1 = $timer->run($workload, $this->pdo);
-        assert($measurement1->timedOut, 'First should timeout');
+        $measurement1 = $this->measure($timer, $workload, $this->pdo);
+        $this->assertTrue($measurement1->timedOut, 'First should timeout');
 
         // Second workload should execute normally
         // (isolation ensures no state leakage from timed-out workload)
-        $measurement2 = $timer->run(
+        $measurement2 = $this->measure($timer,
             new \DBench86\Workload\PrimaryKeySelectWorkload(),
             $this->pdo
         );
-        assert(!$measurement2->timedOut,
+        $this->assertTrue(!$measurement2->timedOut,
             'Second workload should complete normally despite prior timeout');
     }
 
@@ -298,8 +302,8 @@ final class WorkloadTimerTest
         $elapsedDuration = Duration::fromNanoseconds($measurement->durationNanoseconds);
 
         // Time\Duration should handle equality correctly
-        $isTimeout = $elapsedDuration > $timeout; // Not >= , strictly >
-        assert(!$isTimeout,
+        $isTimeout = Duration::compare($elapsedDuration, $timeout) > 0; // Not >= , strictly >
+        $this->assertTrue(!$isTimeout,
             'Execution time == timeout should NOT trigger timeout (use > not >=)');
     }
 
@@ -316,22 +320,34 @@ final class WorkloadTimerTest
         $workload = new \DBench86\Workload\PrimaryKeySelectWorkload();
         $measurements = [];
         for ($i = 0; $i < 3; $i++) {
-            $measurements[] = $timer->run($workload, $this->pdo);
+            $measurements[] = $this->measure($timer, $workload, $this->pdo);
         }
 
         // All measurements should have nanosecond-precision values
         foreach ($measurements as $m) {
-            assert($m->durationNanoseconds > 0,
+            $this->assertTrue($m->durationNanoseconds > 0,
                 'Each measurement should record nanoseconds');
-            assert(is_int($m->durationNanoseconds),
+            $this->assertTrue(is_int($m->durationNanoseconds),
                 'Duration should be integer nanoseconds');
         }
 
         // Verify measurements are not identical (different query execution times)
         $durations = array_map(fn($m) => $m->durationNanoseconds, $measurements);
         $uniqueDurations = array_unique($durations);
-        assert(count($uniqueDurations) > 1,
+        $this->assertTrue(count($uniqueDurations) > 1,
             'Multiple query executions should have different durations');
+    }
+
+    private function measure(WorkloadTimer $timer, Workload $workload, PDO $pdo): WorkloadMeasurement
+    {
+        $workload->prepare($pdo);
+        try {
+            $measurement = $timer->run($workload, $pdo);
+            $this->assertTrue(!$measurement->failed, 'Timer fixture must execute successfully');
+            return $measurement;
+        } finally {
+            $workload->cleanup($pdo);
+        }
     }
 
     public function run(): void
@@ -358,12 +374,13 @@ final class WorkloadTimerTest
             try {
                 $this->setup();
                 $this->$method();
-                $this->teardown();
-                echo "✓ PASS\n";
+
             } catch (\AssertionError $e) {
-                echo "✗ FAIL: {$e->getMessage()}\n";
+                $this->runner->fail($e->getMessage());
             } catch (\Throwable $e) {
-                echo "✗ ERROR: {$e->getMessage()}\n";
+                $this->runner->fail($e->getMessage());
+            } finally {
+                $this->teardown();
             }
         }
     }

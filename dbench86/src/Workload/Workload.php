@@ -9,12 +9,13 @@ use PDO;
  * Contract for a benchmark workload.
  *
  * A Workload defines a repeatable sequence of database operations that tests
- * a specific access pattern or query type. Workloads are stateless and must not:
+ * a specific access pattern or query type. Workloads must not:
  *
  * - Format or output any report/results (that's the runner's job)
  * - Contain or manage database connection credentials (passed explicitly)
  * - Modify global benchmark configuration silently (all parameters explicit)
- * - Maintain state across multiple execute() calls (each call is independent)
+ * Workloads may retain prepared inputs, execution counters and restoration data
+ * across execute() calls. Cleanup restores logical dataset changes after the cycle.
  *
  * Workloads are prepared once before execution, then executed repeatedly with
  * consistent parameters, then cleaned up once after all runs.
@@ -35,8 +36,9 @@ interface Workload
      * Prepare the workload for execution.
      *
      * Called once before any execute() invocations. May create temporary tables,
-     * load reference data, or prepare statements. Called within an active
-     * transaction context (caller ensures consistency).
+     * load reference data, or prepare statements. Runs outside measured timing.
+     * The caller does not guarantee an active transaction; workloads manage
+     * any transactions they require.
      *
      * @param PDO $pdo Active database connection
      * @return void
@@ -65,8 +67,8 @@ interface Workload
      * Clean up after workload execution.
      *
      * Called once after all execute() invocations complete. May drop temporary
-     * tables, reset sequences, or release resources. Errors here should not prevent
-     * caller from proceeding to the next workload (though they may be logged).
+     * tables, restore modified records, or release resources. Restoration failures
+     * must propagate so the caller records a cleanup error and unsuccessful benchmark.
      *
      * @param PDO $pdo Active database connection
      * @return void

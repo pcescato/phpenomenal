@@ -65,7 +65,11 @@ class TestRunner
         $this->currentSuite = $suiteType;
         $this->currentTest = basename($testFile, '.php');
 
-        require_once $testFile;
+        try {
+            require_once $testFile;
+        } catch (\Throwable $e) {
+            $this->fail(get_class($e) . ': ' . $e->getMessage() . "\n" . $e->getTraceAsString());
+        }
     }
 
     public function assertTrue(bool $condition, string $message = ''): void
@@ -133,7 +137,7 @@ class TestRunner
         echo "✓ PASS\n";
     }
 
-    private function fail(string $message): void
+    public function fail(string $message): void
     {
         $this->failCount++;
         echo "✗ FAIL: {$message}\n";

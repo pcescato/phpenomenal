@@ -58,7 +58,7 @@ final class AggregationWorkload implements Workload
         $rowCount = count($rows);
 
 
-        return max(1, $rowCount);
+        return $rowCount;
     }
 
     public function cleanup(PDO $pdo): void

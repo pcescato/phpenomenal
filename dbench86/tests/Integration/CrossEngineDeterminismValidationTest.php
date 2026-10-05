@@ -48,7 +48,7 @@ final class CrossEngineDeterminismValidationTest extends TestCase
         $this->populateAllEngines();
 
         if (count($this->connections) < 1) {
-            $this->fail('No database engines available to test');
+            $this->runner->fail('No database engines available to test');
             return;
         }
 
@@ -56,9 +56,6 @@ final class CrossEngineDeterminismValidationTest extends TestCase
         $this->validateRowCountConsistency();
         $this->validateDataValueConsistency();
 
-        echo "╔══════════════════════════════════════════════════════════════╗\n";
-        echo "║                  ✅ TEST PASSED                              ║\n";
-        echo "╚══════════════════════════════════════════════════════════════╝\n\n";
     }
 
     private function populateAllEngines(): void
@@ -74,13 +71,13 @@ final class CrossEngineDeterminismValidationTest extends TestCase
             ))->populate();
             echo "✓\n";
         } catch (\Exception $e) {
-            echo "✗ " . $e->getMessage() . "\n";
+            $this->runner->fail("SQLite population failed: " . $e->getMessage());
         }
 
         // MariaDB (optional)
         echo "  • MariaDB... ";
         if (!$this->hasMariaDbConfig()) {
-            echo "⊘ skipped (not configured)\n";
+            $this->skip("Optional engine not configured");
         } else {
             try {
                 $driver = new MariaDbDriver(
@@ -97,14 +94,14 @@ final class CrossEngineDeterminismValidationTest extends TestCase
                 ))->populate();
                 echo "✓\n";
             } catch (\Exception $e) {
-                echo "⊘ connection failed\n";
+                $this->runner->fail("Configured engine population failed: " . $e->getMessage());
             }
         }
 
         // PostgreSQL (optional)
         echo "  • PostgreSQL... ";
         if (!$this->hasPostgreSqlConfig()) {
-            echo "⊘ skipped (not configured)\n";
+            $this->skip("Optional engine not configured");
         } else {
             try {
                 $driver = new PostgreSqlDriver(
@@ -121,7 +118,7 @@ final class CrossEngineDeterminismValidationTest extends TestCase
                 ))->populate();
                 echo "✓\n";
             } catch (\Exception $e) {
-                echo "⊘ connection failed\n";
+                $this->runner->fail("Configured engine population failed: " . $e->getMessage());
             }
         }
 
@@ -174,9 +171,10 @@ final class CrossEngineDeterminismValidationTest extends TestCase
             }
 
             if (!$allMatch) {
-                $this->fail("Row count mismatch between engines");
+                $this->runner->fail("Row count mismatch between engines");
                 return;
             }
+            $this->assertTrue($allMatch, 'Row counts match across engines');
         }
 
         echo "\n";
@@ -217,6 +215,8 @@ final class CrossEngineDeterminismValidationTest extends TestCase
 
         $itemCount = (int)$pdo->query('SELECT COUNT(*) FROM order_items')->fetchColumn();
         echo "  OrderItems: {$itemCount} rows (avg " . number_format((float)$itemCount / max(1, $orderCount), 1) . " per order)\n";
+        $this->assertEquals([1000, 150, 300], [$userCount, $productCount, $orderCount]);
+        $this->assertTrue($itemCount >= $orderCount && $itemCount <= 5 * $orderCount);
     }
 
     private function compareTableAcrossEngines(string $tableName, string $query): void
@@ -236,7 +236,7 @@ final class CrossEngineDeterminismValidationTest extends TestCase
 
             if (count($engineData) !== count($refData)) {
                 printf("  ✗ %-12s: %-8s row count mismatch\n", $tableName, $engine);
-                $this->fail("Sample row count mismatch: {$engine}=" . count($engineData) . " vs {$reference}=" . count($refData));
+                $this->runner->fail("Sample row count mismatch: {$engine}=" . count($engineData) . " vs {$reference}=" . count($refData));
                 return;
             }
 
@@ -264,6 +264,7 @@ final class CrossEngineDeterminismValidationTest extends TestCase
                 }
             }
 
+            $this->assertEquals(0, $divergences, "{$tableName}: {$engine} must match {$reference}");
             if ($divergences === 0) {
                 printf("  ✓ %-12s: %-8s matches %-8s (all %d rows identical)\n", $tableName, $engine, $reference, count($refData));
             } else {

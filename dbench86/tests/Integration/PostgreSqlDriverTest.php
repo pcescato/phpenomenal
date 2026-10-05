@@ -51,7 +51,7 @@ class PostgreSqlDriverTest extends TestCase
                 "connect() must return a PDO instance"
             );
         } catch (\Exception $e) {
-            $this->skip("PostgreSQL connection failed: " . $e->getMessage());
+            $this->runner->fail("PostgreSQL connection failed: " . $e->getMessage());
         }
     }
 
@@ -91,7 +91,7 @@ class PostgreSqlDriverTest extends TestCase
                 "Version string should contain version numbers (e.g., '14.1'): got '$version'"
             );
         } catch (\Exception $e) {
-            $this->skip("PostgreSQL version discovery failed: " . $e->getMessage());
+            $this->runner->fail("PostgreSQL version discovery failed: " . $e->getMessage());
         }
     }
 

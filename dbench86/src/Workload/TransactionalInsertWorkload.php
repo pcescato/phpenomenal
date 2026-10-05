@@ -39,19 +39,41 @@ final class TransactionalInsertWorkload implements Workload
             throw new \RuntimeException('Workload not prepared');
         }
 
-        $pdo->exec('BEGIN');
+        $pdo->beginTransaction();
+        try {
+            $rowsInserted = 0;
+            for ($i = 0; $i < $this->rowsPerTransaction; $i++) {
+                $sku = $this->generator->nextString(16);
+                $name = $this->generator->nextString(50);
+                $price = $this->generator->nextFloat(1.0, 999.99);
 
-        $rowsInserted = 0;
-        for ($i = 0; $i < $this->rowsPerTransaction; $i++) {
-            $sku = $this->generator->nextString(16);
-            $name = $this->generator->nextString(50);
-            $price = $this->generator->nextFloat(1.0, 999.99);
+                $this->statement->execute([$sku, $name, round($price, 2)]);
+                $rowsInserted++;
+            }
 
-            $this->statement->execute([$sku, $name, round($price, 2)]);
-            $rowsInserted++;
+            $pdo->commit();
+        } catch (\Throwable $executionError) {
+            if ($pdo->inTransaction()) {
+                try {
+                    $pdo->rollBack();
+                } catch (\Throwable $rollbackError) {
+                    throw new \RuntimeException(
+                        'Transactional insert rollback failed: ' . $rollbackError->getMessage(),
+                        previous: $executionError,
+                    );
+                }
+            }
+            // Reset a failed prepared statement before the next sample (notably SQLite).
+            try {
+                $this->statement->closeCursor();
+            } catch (\Throwable $resetError) {
+                throw new \RuntimeException(
+                    'Transactional insert statement reset failed: ' . $resetError->getMessage(),
+                    previous: $executionError,
+                );
+            }
+            throw $executionError;
         }
-
-        $pdo->exec('COMMIT');
 
         $this->executionCount += $rowsInserted;
 

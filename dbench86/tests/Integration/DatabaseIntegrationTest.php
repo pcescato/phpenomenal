@@ -32,7 +32,7 @@ class DatabaseIntegrationTest extends TestCase
             $value = $pdo->query("SELECT 1")->fetchColumn();
             $this->assertEquals(1, (int)$value, "MariaDB SELECT 1 should return 1");
         } catch (\PDOException $e) {
-            $this->skip("MariaDB not available: " . $e->getMessage());
+            $this->runner->fail("MariaDB configured connection failed: " . $e->getMessage());
         }
     }
 
@@ -52,7 +52,7 @@ class DatabaseIntegrationTest extends TestCase
             $value = $pdo->query("SELECT 1")->fetchColumn();
             $this->assertEquals(1, (int)$value, "PostgreSQL SELECT 1 should return 1");
         } catch (\PDOException $e) {
-            $this->skip("PostgreSQL not available: " . $e->getMessage());
+            $this->runner->fail("PostgreSQL configured connection failed: " . $e->getMessage());
         }
     }
 
@@ -65,7 +65,7 @@ class DatabaseIntegrationTest extends TestCase
             @unlink($tmpdb);
             $this->assertEquals(1, (int)$value, "SQLite SELECT 1 should return 1");
         } catch (\PDOException $e) {
-            $this->skip("SQLite not available: " . $e->getMessage());
+            $this->runner->fail("SQLite connection failed: " . $e->getMessage());
         }
     }
 

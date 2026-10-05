@@ -45,7 +45,7 @@ final class WorkloadExecutorPFATest extends TestCase
         // Execute all workloads using PFA-specialized measurement function
         // The executor internally uses PFA to fix the timer and pdo,
         // creating a specialized function that accepts only Workload
-        $measurements = $executor->execute($workloads, $this->pdo);
+        $measurements = $this->executePrepared($executor, $workloads, $this->pdo);
 
         // Verify we got a measurement for each workload
         $this->assertTrue(
@@ -89,7 +89,7 @@ final class WorkloadExecutorPFATest extends TestCase
         $workload2 = new IndexedSelectWorkload();
 
         $executor = new WorkloadExecutor(Duration::fromSeconds(10));
-        $measurements = $executor->execute([$workload1, $workload2], $this->pdo);
+        $measurements = $this->executePrepared($executor, [$workload1, $workload2], $this->pdo);
 
         // Both measurements should exist and be distinct
         $this->assertTrue(
@@ -122,7 +122,7 @@ final class WorkloadExecutorPFATest extends TestCase
             new PrimaryKeySelectWorkload(),
             new RangeSelectWorkload(),
         ];
-        $pfaMeasurements = $executor->execute($workloads, $this->pdo);
+        $pfaMeasurements = $this->executePrepared($executor, $workloads, $this->pdo);
 
         // Approach 2: Manual explicit closure (PHP 8.5 equivalent)
         $timer = new \DBench86\Benchmark\WorkloadTimer(Duration::fromSeconds(10));
@@ -137,7 +137,14 @@ final class WorkloadExecutorPFATest extends TestCase
 
         $manualMeasurements = [];
         foreach ($workloads as $workload) {
-            $manualMeasurements[$workload->name()] = $runManualClosure($workload);
+            $workload->prepare($this->pdo);
+            try {
+                $manualMeasurements[$workload->name()] = $runManualClosure($workload);
+                $this->assertTrue(!$manualMeasurements[$workload->name()]->failed);
+                $this->assertTrue(!$manualMeasurements[$workload->name()]->timedOut);
+            } finally {
+                $workload->cleanup($this->pdo);
+            }
         }
 
         // Both approaches should produce measurements (we can't compare exact values
@@ -163,6 +170,28 @@ final class WorkloadExecutorPFATest extends TestCase
         }
     }
 
+    private function executePrepared(WorkloadExecutor $executor, array $workloads, PDO $pdo): array
+    {
+        $prepared = [];
+        try {
+            foreach ($workloads as $workload) {
+                $workload->prepare($pdo);
+                $prepared[] = $workload;
+            }
+            $measurements = $executor->execute($workloads, $pdo);
+            foreach ($measurements as $measurement) {
+                $this->assertTrue(!$measurement->failed, 'PFA execution must succeed');
+                $this->assertTrue(!$measurement->timedOut, 'PFA execution must complete within timeout');
+                $this->assertTrue($measurement->rowsAffected > 0, 'Prepared fixture must do logical work');
+            }
+            return $measurements;
+        } finally {
+            foreach ($prepared as $workload) {
+                $workload->cleanup($pdo);
+            }
+        }
+    }
+
     private function setupDatabase(): void
     {
         $this->driver = new SqliteDriver(':memory:');
@@ -179,13 +208,10 @@ final class WorkloadExecutorPFATest extends TestCase
         echo "\nWorkloadExecutorPFATest\n";
         echo "──────────────────────────\n";
         $this->testPartialFunctionApplicationWithMultipleWorkloads();
-        echo "✓ PASS\n";
 
         $this->testPFAPreservesWorkloadIsolation();
-        echo "✓ PASS\n";
 
         $this->testPFAEquivalentToExplicitClosure();
-        echo "✓ PASS\n";
     }
 }
 

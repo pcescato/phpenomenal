@@ -116,7 +116,7 @@ final class WorkloadTimer
         // These are fast O(1) operations that happen AFTER timing
         // NOTE: cleanup() is NOT called here; it's called by the orchestrator (Application.php)
         // This ensures cleanup() is called exactly once per workload, not per execution
-        EXECUTION_METRICS->queries += 1; // One query = one execution attempt
+        EXECUTION_METRICS->queries += 1; // One workload execution attempt
 
         // Only count as completed if no failure and no timeout
         if (!$executionFailed && !$isTimeout) {

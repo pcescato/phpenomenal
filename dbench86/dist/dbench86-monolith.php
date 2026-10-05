@@ -576,7 +576,7 @@ namespace DBench86\Benchmark{
  * only mutated by incrementing its public properties.
  *
  * Intended usage pattern:
- *   EXECUTION_METRICS->queries += 1;  // One query = one execute() call
+ *   EXECUTION_METRICS->queries += 1;  // One attempt = one execute() call
  *   EXECUTION_METRICS->runsCompleted++;
  *
  * Not intended for:
@@ -587,10 +587,10 @@ namespace DBench86\Benchmark{
 final class ExecutionMetrics
 {
     /**
-     * Total number of queries executed (one per execute() call).
+     * Total attempted workload executions, including warmups, failures and timeouts.
      *
-     * Incremented by 1 for each successful workload.execute() invocation,
-     * regardless of the number of rows affected or returned by that query.
+     * Incremented by 1 for every workload.execute() attempt. This is not a SQL
+     * statement count: a workload may execute multiple statements.
      * For tracking rows affected, see the WorkloadMeasurement return value.
      */
     public int $queries = 0;
@@ -598,14 +598,14 @@ final class ExecutionMetrics
     /**
      * Number of workload runs that completed successfully.
      *
-     * Incremented once per successful execute() invocation.
+     * Incremented once per successful execute() invocation within the timeout.
      */
     public int $runsCompleted = 0;
 
     /**
      * Number of workload runs that failed.
      *
-     * Incremented when a workload.execute() throws an exception or returns an error.
+     * Incremented when a workload.execute() throws an exception.
      * Not incremented for connection failures or benchmark infrastructure errors.
      */
     public int $failures = 0;
@@ -614,8 +614,7 @@ final class ExecutionMetrics
      * Number of workload runs that timed out.
      *
      * Incremented when a workload execution exceeds the configured timeout threshold.
-     * May be a subset of $failures (timeouts can be treated as failures) depending on
-     * benchmark configuration.
+     * Only completed executions are checked for timeout; failures are counted separately.
      */
     public int $timeouts = 0;
 }
@@ -626,7 +625,7 @@ final class ExecutionMetrics
  * This constant is initialized once at startup and never reassigned. All workload
  * executions increment its properties directly:
  *
- *   EXECUTION_METRICS->queries += 1;  // One query = one execute() call
+ *   EXECUTION_METRICS->queries += 1;  // One attempt = one execute() call
  *   EXECUTION_METRICS->runsCompleted++;
  *   EXECUTION_METRICS->failures++;
  *
@@ -779,7 +778,8 @@ final class WorkloadMeasurement
      * @param int $durationNanoseconds Elapsed wall time in nanoseconds (hrtime(true) based).
      *                                  Not affected by system clock adjustments.
      * @param int $rowsAffected Number of rows affected by the workload execution.
-     *                           Zero if the workload failed or timed out before returning.
+     *                           Zero if execute() threw; completed executions retain their returned
+     *                           logical operation count even when marked timed out.
      * @param bool $timedOut True if execution exceeded the configured timeout.
      * @param bool $failed True if the workload threw an exception during execute().
      */
@@ -1024,7 +1024,7 @@ final class WorkloadTimer
         // These are fast O(1) operations that happen AFTER timing
         // NOTE: cleanup() is NOT called here; it's called by the orchestrator (Application.php)
         // This ensures cleanup() is called exactly once per workload, not per execution
-        EXECUTION_METRICS->queries += 1; // One query = one execution attempt
+        EXECUTION_METRICS->queries += 1; // One workload execution attempt
 
         // Only count as completed if no failure and no timeout
         if (!$executionFailed && !$isTimeout) {
@@ -1452,12 +1452,24 @@ class BenchmarkConfiguration
         return $this->validatePositiveInt($raw, 'timeout');
     }
 
+    private function validateDecimalInt(mixed $value, string $name): int
+    {
+        if ((!is_int($value) && !is_string($value))
+            || preg_match('/\A[0-9]+\z/', (string) $value) !== 1) {
+            throw new InvalidArgumentException("--{$name} must be a whole decimal integer");
+        }
+        $digits = ltrim((string) $value, '0');
+        $maximum = (string) PHP_INT_MAX;
+        if (strlen($digits) > strlen($maximum)
+            || (strlen($digits) === strlen($maximum) && strcmp($digits, $maximum) > 0)) {
+            throw new InvalidArgumentException("--{$name} exceeds PHP_INT_MAX");
+        }
+        return (int) $value;
+    }
+
     private function validatePositiveInt(mixed $value, string $name): int
     {
-        if (!is_numeric($value)) {
-            throw new InvalidArgumentException("--{$name} doit être numérique, reçu : {$value}");
-        }
-        $int = (int)$value;
+        $int = $this->validateDecimalInt($value, $name);
         if ($int <= 0) {
             throw new InvalidArgumentException("--{$name} doit être positif (> 0), reçu : {$value}");
         }
@@ -1466,14 +1478,7 @@ class BenchmarkConfiguration
 
     private function validateNonNegativeInt(mixed $value, string $name): int
     {
-        if (!is_numeric($value)) {
-            throw new InvalidArgumentException("--{$name} doit être numérique, reçu : {$value}");
-        }
-        $int = (int)$value;
-        if ($int < 0) {
-            throw new InvalidArgumentException("--{$name} doit être >= 0, reçu : {$value}");
-        }
-        return $int;
+        return $this->validateDecimalInt($value, $name);
     }
 
     private function validateSort(string $value): string
@@ -1763,7 +1768,7 @@ final class DatasetGenerator
         $randomOffset = $this->generator->nextInt(0, $twoYearsInSeconds);
         $timestamp = $referenceTime + $randomOffset;
 
-        return date('Y-m-d H:i:s', $timestamp);
+        return gmdate('Y-m-d H:i:s', $timestamp);
     }
 }
 }
@@ -4225,12 +4230,13 @@ use PDO;
  * Contract for a benchmark workload.
  *
  * A Workload defines a repeatable sequence of database operations that tests
- * a specific access pattern or query type. Workloads are stateless and must not:
+ * a specific access pattern or query type. Workloads must not:
  *
  * - Format or output any report/results (that's the runner's job)
  * - Contain or manage database connection credentials (passed explicitly)
  * - Modify global benchmark configuration silently (all parameters explicit)
- * - Maintain state across multiple execute() calls (each call is independent)
+ * Workloads may retain prepared inputs, execution counters and restoration data
+ * across execute() calls. Cleanup restores logical dataset changes after the cycle.
  *
  * Workloads are prepared once before execution, then executed repeatedly with
  * consistent parameters, then cleaned up once after all runs.
@@ -4251,8 +4257,9 @@ interface Workload
      * Prepare the workload for execution.
      *
      * Called once before any execute() invocations. May create temporary tables,
-     * load reference data, or prepare statements. Called within an active
-     * transaction context (caller ensures consistency).
+     * load reference data, or prepare statements. Runs outside measured timing.
+     * The caller does not guarantee an active transaction; workloads manage
+     * any transactions they require.
      *
      * @param PDO $pdo Active database connection
      * @return void
@@ -4281,8 +4288,8 @@ interface Workload
      * Clean up after workload execution.
      *
      * Called once after all execute() invocations complete. May drop temporary
-     * tables, reset sequences, or release resources. Errors here should not prevent
-     * caller from proceeding to the next workload (though they may be logged).
+     * tables, restore modified records, or release resources. Restoration failures
+     * must propagate so the caller records a cleanup error and unsuccessful benchmark.
      *
      * @param PDO $pdo Active database connection
      * @return void
@@ -4366,7 +4373,7 @@ final class AggregationWorkload implements Workload
         $rowCount = count($rows);
 
 
-        return max(1, $rowCount);
+        return $rowCount;
     }
 
     public function cleanup(PDO $pdo): void
@@ -4510,6 +4517,7 @@ final class DeleteByPrimaryKeyWorkload implements Workload
     private int $currentIndex = 0;
     private array $deletedProducts = [];
     private array $productsDeletedInRun = [];
+    private array $originalOrderItems = [];
 
     public function __construct(private readonly DeterministicSamples $samples = new DeterministicSamples()) {}
 
@@ -4527,11 +4535,19 @@ final class DeleteByPrimaryKeyWorkload implements Workload
 
         $this->productIds = $this->samples->tableIds($pdo, 'products', $this->name());
         $this->deletedProducts = [];
+        $this->originalOrderItems = [];
+        $items = $pdo->prepare('SELECT id, order_id, product_id, quantity, unit_price FROM order_items WHERE product_id = ?');
         $lookup = $pdo->prepare('SELECT id, sku, name, price FROM products WHERE id = ?');
         foreach ($this->productIds as $id) {
             $lookup->execute([$id]);
             $this->deletedProducts[$id] = $lookup->fetch(PDO::FETCH_ASSOC);
             $lookup->closeCursor();
+            $items->execute([$id]);
+            $this->originalOrderItems[$id] = [];
+            while ($item = $items->fetch(PDO::FETCH_ASSOC)) {
+                $this->originalOrderItems[$id][] = $item;
+            }
+            $items->closeCursor();
         }
 
         $this->deleteStatement = $pdo->prepare('DELETE FROM products WHERE id = ?');
@@ -4563,46 +4579,42 @@ final class DeleteByPrimaryKeyWorkload implements Workload
 
     public function cleanup(PDO $pdo): void
     {
-        // Workload Isolation Strategy:
-        // After deletions, we must restore the deleted products to ensure the dataset
-        // is in a consistent state for repeated benchmark cycles.
-        //
-        // Challenge: Products are referenced by order_items via foreign key constraint.
-        // When we delete a product, any order_items referencing it become orphaned.
-        //
-        // Solution: Before re-inserting products, we must first delete any orphaned
-        // order_items that reference products not yet restored. This maintains referential
-        // integrity and allows the products to be re-inserted successfully.
-
-        if (!empty($this->productsDeletedInRun) && $this->insertStatement !== null) {
-            // Get the actual product IDs that were deleted in this run
-            $deletedIds = array_keys($this->productsDeletedInRun);
-
-            // First, delete orphaned order_items that reference deleted products
-            $idList = implode(',', $deletedIds);
-            $pdo->exec("DELETE FROM order_items WHERE product_id IN ({$idList})");
-
-            // Now re-insert the deleted products from our stored data
-            foreach ($deletedIds as $productId) {
-                if (!isset($this->deletedProducts[$productId])) {
-                    // This should not happen in normal operation
-                    // Skip if product data is missing
-                    continue;
-                }
-
-                $product = $this->deletedProducts[$productId];
+        if ($this->insertStatement === null || $this->productsDeletedInRun === []) {
+            return;
+        }
+        // Preparation snapshots only sampled products and their dependent items.
+        // Existence checks also handle an execution that failed between the two deletes.
+        $productExists = $pdo->prepare('SELECT id FROM products WHERE id = ?');
+        $itemExists = $pdo->prepare('SELECT id FROM order_items WHERE id = ?');
+        $restoreItem = $pdo->prepare(
+            'INSERT INTO order_items (id, order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, ?, ?)'
+        );
+        foreach (array_keys($this->productsDeletedInRun) as $productId) {
+            $product = $this->deletedProducts[$productId];
+            $productExists->execute([$productId]);
+            $exists = $productExists->fetchColumn() !== false;
+            $productExists->closeCursor();
+            if (!$exists) {
                 try {
                     $this->insertStatement->execute([
-                        $product['id'],
-                        $product['sku'],
-                        $product['name'],
-                        $product['price']
+                        $product['id'], $product['sku'], $product['name'], $product['price'],
                     ]);
-                } catch (\PDOException $e) {
-                    // Product may already exist (concurrent execution or race condition)
-                    // Skip and continue
+                } finally {
+                    $this->insertStatement->closeCursor();
                 }
             }
+            foreach ($this->originalOrderItems[$productId] as $item) {
+                $itemExists->execute([$item['id']]);
+                $exists = $itemExists->fetchColumn() !== false;
+                $itemExists->closeCursor();
+                if (!$exists) {
+                    $restoreItem->execute([
+                        $item['id'], $item['order_id'], $item['product_id'],
+                        $item['quantity'], $item['unit_price'],
+                    ]);
+                }
+            }
+            unset($this->productsDeletedInRun[$productId]);
         }
     }
 
@@ -5045,19 +5057,41 @@ final class TransactionalInsertWorkload implements Workload
             throw new \RuntimeException('Workload not prepared');
         }
 
-        $pdo->exec('BEGIN');
+        $pdo->beginTransaction();
+        try {
+            $rowsInserted = 0;
+            for ($i = 0; $i < $this->rowsPerTransaction; $i++) {
+                $sku = $this->generator->nextString(16);
+                $name = $this->generator->nextString(50);
+                $price = $this->generator->nextFloat(1.0, 999.99);
 
-        $rowsInserted = 0;
-        for ($i = 0; $i < $this->rowsPerTransaction; $i++) {
-            $sku = $this->generator->nextString(16);
-            $name = $this->generator->nextString(50);
-            $price = $this->generator->nextFloat(1.0, 999.99);
+                $this->statement->execute([$sku, $name, round($price, 2)]);
+                $rowsInserted++;
+            }
 
-            $this->statement->execute([$sku, $name, round($price, 2)]);
-            $rowsInserted++;
+            $pdo->commit();
+        } catch (\Throwable $executionError) {
+            if ($pdo->inTransaction()) {
+                try {
+                    $pdo->rollBack();
+                } catch (\Throwable $rollbackError) {
+                    throw new \RuntimeException(
+                        'Transactional insert rollback failed: ' . $rollbackError->getMessage(),
+                        previous: $executionError,
+                    );
+                }
+            }
+            // Reset a failed prepared statement before the next sample (notably SQLite).
+            try {
+                $this->statement->closeCursor();
+            } catch (\Throwable $resetError) {
+                throw new \RuntimeException(
+                    'Transactional insert statement reset failed: ' . $resetError->getMessage(),
+                    previous: $executionError,
+                );
+            }
+            throw $executionError;
         }
-
-        $pdo->exec('COMMIT');
 
         $this->executionCount += $rowsInserted;
 

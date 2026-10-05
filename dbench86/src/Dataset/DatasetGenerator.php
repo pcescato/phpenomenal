@@ -230,6 +230,6 @@ final class DatasetGenerator
         $randomOffset = $this->generator->nextInt(0, $twoYearsInSeconds);
         $timestamp = $referenceTime + $randomOffset;
 
-        return date('Y-m-d H:i:s', $timestamp);
+        return gmdate('Y-m-d H:i:s', $timestamp);
     }
 }
