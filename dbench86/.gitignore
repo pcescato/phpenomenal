@@ -1,0 +1,14 @@
+var/
+validation/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+.env
+.env.*
+!.env.example
+!.env.sample
+.dbench86-test-config.php
+*.tmp
+tmp/
