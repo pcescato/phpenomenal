@@ -34,7 +34,7 @@ function checkAssertion(bool $passed, string $label, string $detail = ''): void
     }
 }
 
-function checkFixture(string $label, string $source, array $expected, ?int $expectedExit = null, bool $validSyntax = true): void
+function checkFixture(string $label, string $source, array $expected, ?int $expectedExit = null, bool $validSyntax = true, bool $execute = false): void
 {
     global $checker, $fixtures;
     $path = tempnam(sys_get_temp_dir(), 'php86-feature-');
@@ -61,7 +61,9 @@ function checkFixture(string $label, string $source, array $expected, ?int $expe
     checkAssertion($exit === ($expectedExit ?? 1), "$label / CLI exit", "Exit: $exit\n$output");
     if ($expectedExit === 0) {
         checkAssertion(str_contains($output, 'All 7 PHP 8.6 features are used.'), "$label / success message", $output);
-        // This complete fixture is self-contained and must also execute on PHP 8.6.
+    }
+    if ($expectedExit === 0 || $execute) {
+        // Self-contained fixtures must also execute on PHP 8.6.
         [$executionExit, $executionOutput] = runCommand([PHP_BINARY, $path]);
         checkAssertion($executionExit === 0, "$label / execution", $executionOutput);
     }
@@ -148,6 +150,45 @@ try {
         'qualified constant' => '++Vendor\HOLDER->number;',
         'fully qualified constant' => '\HOLDER->number++;',
         'relative constant' => 'namespace Example; --namespace\HOLDER->number;',
+        'scoped prefix' => '++Container::HOLDER->number;',
+        'scoped postfix' => 'Container::HOLDER->number++;',
+        'scoped assignment' => 'Container::HOLDER->number = 42;',
+        'scoped compound assignment' => 'Container::HOLDER->number += 1;',
+        'qualified class scope' => '--Vendor\Container::HOLDER->number;',
+        'fully qualified class scope' => '\Container::HOLDER->number--;',
+        'relative class scope' => 'namespace Example; ++namespace\Container::HOLDER->number;',
+        'self scope' => 'class Container { public function run(): void { ++self::HOLDER->number; } }',
+        'parent scope' => 'class Base {} class Container extends Base { public function run(): void { --parent::HOLDER->number; } }',
+        'static scope' => 'class Container { public function run(): void { static::HOLDER->number++; } }',
+        'object scope' => '++$object::HOLDER->number;',
+        'variable class scope' => '$class::HOLDER->number = 42;',
+        'scoped comments' => '++Container /* comment */ :: /* comment */ HOLDER->number;',
+        'nested prefix' => '++HOLDER->child->number;',
+        'nested postfix' => 'HOLDER->child->number++;',
+        'nested decrement' => '--HOLDER->child->number;',
+        'nested assignment' => 'HOLDER->child->number = 42;',
+        'nested compound assignment' => 'HOLDER->child->number += 1;',
+        'deep scoped prefix' => '++Container::HOLDER->child->child->number;',
+        'nested scoped postfix' => '$object::HOLDER->child->number--;',
+        'nested scoped assignment' => 'Container::HOLDER->child->number = 42;',
+        'nested comments' => '++HOLDER->child /* comment */ -> /* comment */ number;',
+        'prefix in call' => 'print(++HOLDER->child->number);',
+        'dimension prefix' => '++HOLDER->items[0]->number;',
+        'dimension scoped assignment' => 'Container::HOLDER->items[0]->number = 1;',
+        'dimension nested postfix' => 'HOLDER->child->items[0]->number++;',
+        'multiple dimensions' => 'HOLDER->items[0][1]->number += 1;',
+        'nested dimension expression' => 'HOLDER->items[$indices[0]]->number--;',
+        'bracket in string index' => '++HOLDER->items["]"]->number;',
+        'dimension comments' => '++HOLDER->items[/* ] */ 0 /* [ */]->number;',
+        'dimension with call index' => 'HOLDER->items[indexOf([0])]->number = 1;',
+        'direct foreach target' => 'foreach ([1] as HOLDER->number) {}',
+        'scoped foreach target' => 'foreach ([1] as Container::HOLDER->number) {}',
+        'dimension foreach target' => 'foreach ([1] as HOLDER->items[0]->number) {}',
+        'reference foreach target' => 'foreach ([1] as &HOLDER->number) {}',
+        'foreach key target' => 'foreach ([1 => 2] as HOLDER->number => $value) {}',
+        'reference binding' => '$r = &HOLDER->number;',
+        'scoped reference binding' => '$r = &$object::HOLDER->number;',
+        'dimension reference binding' => '$r = &HOLDER->items[0]->number;',
     ] as $label => $source) {
         checkFixture("writes / $label", $source, [$writes => true]);
     }
@@ -161,13 +202,64 @@ try {
         'prefix method call' => '++HOLDER->increment();',
         'variable chain' => '$object->HOLDER->number++;',
         'nullsafe chain' => '$object?->HOLDER->number++;',
-        'static chain' => 'Example::HOLDER->number++;',
-        'prefix property chain' => '++HOLDER->child->number;',
         'prefix array dimension' => '++HOLDER->items[0];',
         'construction' => 'new HOLDER->number++;',
         'ordinary expression' => '++$number;',
+        'scoped read' => '$value = Container::HOLDER->number;',
+        'nested read' => '$value = HOLDER->child->number;',
+        'scoped nested read' => '$value = $object::HOLDER->child->number;',
+        'nested variable assignment' => '$object->child->number = 42;',
+        'static property' => 'Container::$HOLDER->number++;',
+        'variable static property' => '$object::$holder->number++;',
+        'class pseudo constant' => 'Container::class->number++;',
+        'scoped method' => 'Container::getHolder()->number++;',
+        'nested method' => 'HOLDER->getChild()->number++;',
+        'nested final method' => 'HOLDER->child->increment();',
+        'scoped final method' => 'Container::HOLDER->increment();',
+        'nested nullsafe read' => '$value = HOLDER->child?->number;',
+        'scoped nullsafe read' => '$value = Container::HOLDER?->number;',
+        'nested nullsafe write' => 'HOLDER->child?->number++;',
+        'scoped nullsafe write' => '++Container::HOLDER?->number;',
+        'comparison' => 'HOLDER->number == 42;',
+        'nested comparison' => 'HOLDER->child->number === 42;',
+        'scoped comparison' => 'Container::HOLDER->child->number >= 42;',
+        'object scoped comparison' => '$object::HOLDER->number != 42;',
+        'scoped comment' => '// ++Container::HOLDER->child->number;',
+        'scoped string' => '$text = "Container::HOLDER->child->number++";',
+        'array element postfix' => 'HOLDER->items[0]++;',
+        'array element assignment' => 'Container::HOLDER->items[0] = 1;',
+        'nested array element assignment' => 'HOLDER->items[0]->items[0] = 1;',
+        'array element foreach target' => 'foreach ([1] as HOLDER->items[0]) {}',
+        'array element reference' => '$r = &HOLDER->items[0];',
+        'dimension read' => '$value = HOLDER->items[0]->number;',
+        'dimension comparison' => 'HOLDER->items[0]->number === 1;',
+        'dimension variable root' => '++$object->items[0]->number;',
+        'dimension method' => 'HOLDER->items[0]->increment();',
+        'dimension method chain' => 'HOLDER->items[0]->getChild()->number++;',
+        'dimension nullsafe read' => '$value = HOLDER->items[0]?->number;',
+        'dimension nullsafe write' => '++HOLDER->items[0]?->number;',
+        'unbalanced dimension' => '++HOLDER->items[0->number;',
+        'keyword read' => '$value = Status::DEFAULT->number;',
+        'keyword method' => 'Status::DEFAULT->increment();',
+        'keyword method constant' => 'Container::LIST()->number++;',
+        'keyword comparison' => 'Container::LIST->number == 1;',
+        'literal constant name' => 'Status::123->number++;',
+        'quoted constant name' => "Status::'DEFAULT'->number++;",
+        'keyword comment' => '// Status::DEFAULT->number++;',
+        'keyword string' => '$text = "Status::DEFAULT->number++";',
+        'bitwise and read' => '$r = $mask & HOLDER->number;',
+        'reference parameter read' => 'function read(int &$r = HOLDER->number): void {}',
+        'foreach iterable read' => 'foreach ([HOLDER->number] as $value) {}',
+        'array literal read' => '$values = [HOLDER->number, $x];',
+        'array literal key read' => '$values = [HOLDER->number => 1];',
     ] as $label => $source) {
-        checkFixture("writes / $label", $source, [$writes => false], null, !in_array($label, ['prefix method call', 'nullsafe chain', 'construction'], true));
+        checkFixture("writes / $label", $source, [$writes => false], null, !in_array($label, ['prefix method call', 'nullsafe chain', 'construction', 'nested nullsafe write', 'scoped nullsafe write', 'class pseudo constant', 'dimension nullsafe write', 'unbalanced dimension', 'literal constant name', 'quoted constant name'], true));
+    }
+
+    checkFixture('writes / reserved halt compiler constant', 'Container::__halt_compiler->number++;', [$writes => false], null, false);
+
+    foreach (['DEFAULT', 'LIST', 'MATCH', 'PUBLIC', 'FUNCTION', 'NEW', 'ARRAY', 'NAMESPACE', '__CLASS__'] as $name) {
+        checkFixture("writes / keyword constant $name", "Container::{$name}->number++;", [$writes => true]);
     }
 
     foreach ([
@@ -184,6 +276,91 @@ try {
     checkFixture('all features / strings only', <<<'SOURCE'
 $text = 'strlen(?); \Time\Duration::fromMilliseconds(50); clamp(5, 0, 10); #[\Override] public const LIMIT = 100; ++HOLDER->number; readonly int $number = 1; SortDirection::Ascending;';
 SOURCE, array_fill_keys(array_keys($all), false));
+
+    $scoped = <<<'SOURCE'
+class Node {
+    public int $number = 0;
+    public function __construct(public ?Node $child = null) {}
+}
+const HOLDER = new Node(new Node());
+class Container {
+    public const HOLDER = HOLDER;
+    public function run(): void {
+        ++self::HOLDER->number;
+        --static::HOLDER->child->number;
+    }
+}
+class ChildContainer extends Container {
+    public function runParent(): void { ++parent::HOLDER->number; }
+}
+++Container::HOLDER->number;
+++HOLDER->child->number;
+HOLDER->child->number++;
+Container::HOLDER->child->number += 1;
+$object = new Container();
+++$object::HOLDER->number;
+$class = Container::class;
+$class::HOLDER->child->number = 42;
+$object->run();
+(new ChildContainer())->runParent();
+if (HOLDER->number !== 4 || HOLDER->child->number !== 41) {
+    throw new RuntimeException('Unexpected scoped/nested property values');
+}
+SOURCE;
+    checkFixture('executable scoped and nested writes', $scoped, [$writes => true], null, true, true);
+
+    $writeSetup = <<<'SOURCE'
+class Node {
+    public int $number = 0;
+    public function __construct(public array $items = [], public ?Node $child = null) {}
+}
+const HOLDER = new Node(
+    [new Node(), [new Node()], 5, ']' => new Node(), 'key]' => new Node()],
+    new Node([new Node()]),
+);
+class Container { public const HOLDER = HOLDER; public const LIST = HOLDER; public const ECHO = HOLDER; }
+class Status { public const DEFAULT = HOLDER; }
+SOURCE;
+    // Each executable case checks its own mutation, without mixing detectors.
+    foreach ([
+        'dimension prefix' => ['++HOLDER->items[0]->number;', 'HOLDER->items[0]->number === 1'],
+        'dimension scoped assignment' => ['Container::HOLDER->items[0]->number = 1;', 'HOLDER->items[0]->number === 1'],
+        'dimension nested postfix' => ['HOLDER->child->items[0]->number++;', 'HOLDER->child->items[0]->number === 1'],
+        'multiple dimensions' => ['HOLDER->items[1][0]->number += 2;', 'HOLDER->items[1][0]->number === 2'],
+        'nested dimension expression' => ['HOLDER->items[[1][0]][0]->number++;', 'HOLDER->items[1][0]->number === 1'],
+        'quoted closing bracket' => ['++HOLDER->items["]"]->number;', 'HOLDER->items["]"]->number === 1'],
+        'interpolated closing bracket' => ['$key = "key"; ++HOLDER->items["$key]"]->number;', 'HOLDER->items["key]"]->number === 1'],
+        'keyword DEFAULT' => ['Status::DEFAULT->number++;', 'HOLDER->number === 1'],
+        'keyword LIST' => ['Container::LIST->number = 1;', 'HOLDER->number === 1'],
+        'keyword ECHO postfix' => ['Container::ECHO->number++;', 'HOLDER->number === 1'],
+        'keyword ECHO assignment' => ['Container::ECHO->number = 1;', 'HOLDER->number === 1'],
+        'foreach target' => ['foreach ([1] as HOLDER->number) {}', 'HOLDER->number === 1'],
+        'reference foreach target' => ['foreach ([1] as &HOLDER->number) {}', 'HOLDER->number === 1'],
+        'foreach key target' => ['foreach ([4 => 5] as HOLDER->number => $value) {}', 'HOLDER->number === 4 && $value === 5'],
+        'reference binding' => ['$r = &HOLDER->number; $r = 1;', 'HOLDER->number === 1'],
+        'dimension reference binding' => ['$r = &HOLDER->items[0]->number; $r = 1;', 'HOLDER->items[0]->number === 1'],
+    ] as $label => [$source, $condition]) {
+        $verify = "\nif (!($condition)) { throw new RuntimeException('Unexpected property value'); }";
+        checkFixture("executable writes / $label", $writeSetup . "\n" . $source . $verify, [$writes => true], null, true, true);
+    }
+    // Final array-element mutations are deliberately outside named-property detection.
+    foreach ([
+        'array element prefix' => ['++HOLDER->items[2];', 'HOLDER->items[2] === 6'],
+        'array element assignment' => ['Container::HOLDER->items[2] = 1;', 'HOLDER->items[2] === 1'],
+    ] as $label => [$source, $condition]) {
+        $verify = "\nif (!($condition)) { throw new RuntimeException('Unexpected array element value'); }";
+        checkFixture("executable excluded / $label", $writeSetup . "\n" . $source . $verify, [$writes => false], null, true, true);
+    }
+    // These are valid PHP property writes, but require wider target-group context.
+    // Keep known limitations explicit rather than calling these ordinary reads.
+    foreach ([
+        'destructuring target' => '[HOLDER->number, $x] = [1, 2];',
+        'list target' => 'list(HOLDER->number) = [1];',
+        'keyed foreach value target' => 'foreach ([2 => 1] as $key => HOLDER->number) {}',
+    ] as $label => $source) {
+        $verify = "\nif (HOLDER->number !== 1) { throw new RuntimeException('Unexpected property value'); }";
+        checkFixture("known lexical limitation / $label", $writeSetup . "\n" . $source . $verify, [$writes => false], null, true, true);
+    }
 
     $complete = <<<'SOURCE'
 enum CommandName { case NumberPrinter; }
