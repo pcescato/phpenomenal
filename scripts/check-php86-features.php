@@ -72,25 +72,17 @@ $checks[] = new FeatureCheck(
     },
 );
 
-// Time\Duration: the tokenizer may hand back a single qualified-name
-// token or three separate ones (Time, \, Duration) depending on context.
+// Exact class-name matching, including a leading namespace separator.
+// This is lexical: imports/aliases and the current namespace are not resolved.
 $checks[] = new FeatureCheck(
     'Time\\Duration',
     'a reference to the Time\\Duration class',
     function (array $tokens): ?int {
-        foreach ($tokens as $i => $token) {
-            if ($token->is([T_NAME_QUALIFIED, T_STRING]) && str_contains($token->text, 'Time\\Duration')) {
+        foreach ($tokens as $token) {
+            if ($token->is([T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_STRING])
+                && strcasecmp(ltrim($token->text, '\\'), 'Time\\Duration') === 0
+            ) {
                 return $token->line;
-            }
-            if ($token->text === 'Time') {
-                $sep = nextSignificant($tokens, $i, 1);
-                $name = $sep !== null ? nextSignificant($tokens, $sep, 1) : null;
-                if ($sep !== null && $name !== null
-                    && $tokens[$sep]->is(T_NS_SEPARATOR)
-                    && $tokens[$name]->text === 'Duration'
-                ) {
-                    return $token->line;
-                }
             }
         }
         return null;
@@ -114,7 +106,41 @@ $checks[] = new FeatureCheck(
     },
 );
 
-// #[\Override] directly attached to a const declaration.
+/** Inspect one attribute group, matching names only (never arguments). */
+function inspectAttributeGroup(array $tokens, int $start): ?array
+{
+    $depth = 1;
+    $expectName = true;
+    $sawOverride = false;
+    for ($i = $start + 1; isset($tokens[$i]); $i++) {
+        $token = $tokens[$i];
+        if ($token->is([T_WHITESPACE, T_COMMENT, T_DOC_COMMENT])) {
+            continue;
+        }
+        if ($depth === 1 && $expectName) {
+            if ($token->is([T_STRING, T_NAME_FULLY_QUALIFIED])
+                && strcasecmp(ltrim($token->text, '\\'), 'Override') === 0
+            ) {
+                $sawOverride = true;
+            }
+            $expectName = false;
+        }
+        if ($token->is(T_ATTRIBUTE) || in_array($token->text, ['[', '(', '{'], true)) {
+            $depth++;
+        } elseif (in_array($token->text, [']', ')', '}'], true)) {
+            $depth--;
+            if ($depth === 0) {
+                return [$i, $sawOverride];
+            }
+        } elseif ($depth === 1 && $token->text === ',') {
+            $expectName = true;
+        }
+    }
+    return null;
+}
+
+// Attribute groups may precede visibility/final modifiers on a constant.
+// Attribute aliases and namespace resolution remain outside this lexical check.
 $checks[] = new FeatureCheck(
     '#[\\Override] on a constant',
     'an #[\\Override] attribute immediately before a const declaration',
@@ -123,22 +149,23 @@ $checks[] = new FeatureCheck(
             if (!$token->is(T_ATTRIBUTE)) {
                 continue;
             }
-            $depth = 1;
-            $j = $i;
+            $after = $i;
             $sawOverride = false;
-            while ($depth > 0 && isset($tokens[++$j])) {
-                if ($tokens[$j]->text === '[') {
-                    $depth++;
-                } elseif ($tokens[$j]->text === ']') {
-                    $depth--;
-                } elseif (str_contains($tokens[$j]->text, 'Override')) {
-                    $sawOverride = true;
+            do {
+                $group = inspectAttributeGroup($tokens, $after);
+                if ($group === null) {
+                    break;
                 }
-            }
-            if (!$sawOverride) {
+                [$end, $override] = $group;
+                $sawOverride = $sawOverride || $override;
+                $after = nextSignificant($tokens, $end);
+            } while ($after !== null && $tokens[$after]->is(T_ATTRIBUTE));
+            if ($group === null || !$sawOverride) {
                 continue;
             }
-            $after = nextSignificant($tokens, $j, 1);
+            while ($after !== null && $tokens[$after]->is([T_PUBLIC, T_PROTECTED, T_PRIVATE, T_FINAL])) {
+                $after = nextSignificant($tokens, $after);
+            }
             if ($after !== null && $tokens[$after]->is(T_CONST)) {
                 return $token->line;
             }
@@ -147,19 +174,19 @@ $checks[] = new FeatureCheck(
     },
 );
 
-// Writes on a const-held object: BARE_NAME->prop (assignment or ++/--),
-// where BARE_NAME isn't itself preceded by -> or :: (i.e. not a chained
-// property access, but a fresh identifier such as a global constant).
+// Writes on a const-held object: NAME->prop with assignment or prefix/postfix
+// ++/--. Qualified constant names are supported; declarations are not resolved.
+// Exclude chains and construction, and require a direct property write.
 $checks[] = new FeatureCheck(
     'writes on const-held objects',
     'CONST->prop = ... or CONST->prop++',
     function (array $tokens): ?int {
         foreach ($tokens as $i => $token) {
-            if (!$token->is(T_STRING)) {
+            if (!$token->is([T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE])) {
                 continue;
             }
             $prev = nextSignificant($tokens, $i, -1);
-            if ($prev !== null && in_array($tokens[$prev]->text, ['->', '::'], true)) {
+            if ($prev !== null && ($tokens[$prev]->is(T_NEW) || in_array($tokens[$prev]->text, ['->', '?->', '::', '\\'], true))) {
                 continue; // part of a chain, not a fresh identifier
             }
             $arrow = nextSignificant($tokens, $i, 1);
@@ -171,7 +198,10 @@ $checks[] = new FeatureCheck(
                 continue;
             }
             $op = nextSignificant($tokens, $prop, 1);
-            if ($op !== null && in_array($tokens[$op]->text, ASSIGN_OPERATORS, true)) {
+            $postfixOrAssignment = $op !== null && in_array($tokens[$op]->text, ASSIGN_OPERATORS, true);
+            $prefix = $prev !== null && $tokens[$prev]->is([T_INC, T_DEC])
+                && $op !== null && !in_array($tokens[$op]->text, ['(', '[', '->', '?->', '::'], true);
+            if ($postfixOrAssignment || $prefix) {
                 return $token->line;
             }
         }
